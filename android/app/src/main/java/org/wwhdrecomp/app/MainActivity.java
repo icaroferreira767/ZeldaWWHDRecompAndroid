@@ -204,6 +204,13 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
             return;
         }
         if (WorkService.Work.takeFinished(this)) return;
+        try {
+            ExtractedGame.recover(new File(gameDir()));
+        } catch (IOException e) {
+            showSetup(e.getMessage());
+            new AlertDialog.Builder(this).setMessage(e.getMessage()).setPositiveButton(android.R.string.ok, null).show();
+            return;
+        }
         // WWHD_SELFTEST=1: renderer test without game files (runtime/src/android/selftest.cpp)
         String problem = Os.getenv("WWHD_SELFTEST") != null ? null : Native.checkGame(gameDir());
         if (problem != null) {
@@ -393,6 +400,11 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         extract.setText(R.string.setup_extract);
         extract.setOnClickListener(v -> pickFolder(PICK_DISC));
         box.addView(extract, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        Button extracted = new Button(this);
+        extracted.setText(R.string.setup_extracted);
+        extracted.setOnClickListener(v -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION), PICK_EXTRACTED));
+        box.addView(extracted, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         Button retry = new Button(this);
         retry.setText(R.string.setup_retry);
         retry.setOnClickListener(v -> checkAndStart());
@@ -1031,9 +1043,12 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         boolean ok = WorkService.Work.start(this, WorkService.Work.EXTRACT, () -> {
             Backup.deleteTree(work);
             String err = Native.extractGame(fd, dk, ck, work.getAbsolutePath());
-            if (err == null) {  // complete: swap it in for the old game folder
-                Backup.deleteTree(game);
-                if (!work.renameTo(game)) err = "cannot move the extracted files into place";
+            if (err == null) {  // complete: the same publication used for a folder import
+                try {
+                    ExtractedGame.install(work, game);
+                } catch (IOException e) {
+                    err = e.getMessage();
+                }
             } else {
                 Backup.deleteTree(work);
             }
@@ -1042,18 +1057,57 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         if (ok) showWorkScreen(WorkService.Work.EXTRACT);
     }
 
-    // ------------------------------------------------------------------ extraction and compile screens
+    // ------------------------------------------------------------------ game from an already extracted folder
+    private void startExtractedImport(Intent result) {
+        android.net.Uri tree = result.getData();
+        int flags = result.getFlags();
+        if ((flags & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0) {
+            try {
+                getContentResolver().takePersistableUriPermission(tree, flags & Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException e) {
+                // Some providers only grant access for this session. The import still works;
+                // after a process restart the user selects the folder again.
+                Log.w(TAG, "folder provider did not retain read permission", e);
+            }
+        }
+        android.content.ContentResolver resolver = getApplicationContext().getContentResolver();
+        File staging = new File(baseDir(), "game-importing"), game = new File(gameDir());
+        // Capture application objects and paths, never the activity, for the background job.
+        String invalid = getString(R.string.import_invalid), stopped = getString(R.string.import_cancelled);
+        String space = getString(R.string.space_title), failed = getString(R.string.import_failed);
+        askNotifications();
+        ExtractedGame.resetProgress();
+        if (WorkService.Work.start(this, WorkService.Work.IMPORT, () -> {
+            try {
+                ExtractedGame.importGame(new ExtractedGameSource(resolver, tree),
+                        android.provider.DocumentsContract.getTreeDocumentId(tree), staging, game,
+                        WorkService.Work::cancelled, dir -> Native.checkGame(dir.getAbsolutePath()));
+                return null;
+            } catch (ExtractedGame.InvalidFolder e) {
+                return invalid;
+            } catch (ExtractedGame.Cancelled e) {
+                return stopped;
+            } catch (ExtractedGame.NoSpace e) {
+                return space;
+            } catch (IOException | RuntimeException e) {
+                return failed + "\n\n" + String.valueOf(e.getMessage());
+            }
+        })) showWorkScreen(WorkService.Work.IMPORT);
+    }
+
+    // ------------------------------------------------------------------ extraction, import and compile screens
     // The work runs in WorkService.Work (with a notification, so it continues in the background);
     // this screen shows its progress, also when the app is opened again while it runs.
     private void showWorkScreen(int kind) {
         boolean extract = kind == WorkService.Work.EXTRACT;
+        boolean importing = kind == WorkService.Work.IMPORT;
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         int pad = (int) (24 * getResources().getDisplayMetrics().density);
         box.setPadding(pad, pad, pad, pad);
         TextView t = new TextView(this);
         t.setTextSize(16);
-        t.setText(extract ? R.string.extract_running : R.string.compile_running);
+        t.setText(importing ? R.string.import_running : extract ? R.string.extract_running : R.string.compile_running);
         box.addView(t);
         android.widget.ProgressBar bar = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax(1000);
@@ -1065,7 +1119,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         cancel.setOnClickListener(v -> {  // a compile's parts in progress still finish (up to half a minute)
             WorkService.Work.markCancelled();
             if (extract) Native.extractCancel();
-            else Native.compileCancel();
+            else if (!importing) Native.compileCancel();
             cancel.setEnabled(false);
             cancel.setText(R.string.compile_stopping);
         });
@@ -1077,13 +1131,17 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
             @Override
             public void run() {
                 if (WorkService.Work.running() != kind || sea != mySea) return;  // finished, or another screen
-                long[] p = extract ? Native.extractProgress() : Native.compileProgress();
+                long[] p = WorkService.Work.progress(kind);
                 long s = WorkService.Work.elapsedSeconds();
                 if (p[1] > 0) {
                     bar.setProgress((int) (p[0] * 1000 / p[1]));
                     mySea.setProgress((float) p[0] / p[1]);
                 }
-                if (extract) {
+                bar.setIndeterminate(p[1] <= 0);
+                if (importing) {
+                    detail.setText(p[1] > 0 ? getString(R.string.extract_detail_short, p[0] / 1048576, p[1] / 1048576)
+                            : getString(R.string.import_detail, p[0] / 1048576));
+                } else if (extract) {
                     if (p[1] > 0) detail.setText(getString(R.string.extract_detail, p[0] / 1048576, p[1] / 1048576, s > 0 ? p[0] / 1048576.0 / s : 0));
                 } else {
                     detail.setText(getString(R.string.compile_detail, p[0], p[1], s / 60, s % 60));
@@ -1095,7 +1153,14 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
 
     /** A job of WorkService.Work finished (called on the main thread, possibly in a later activity). */
     void workFinished(int kind, String err, boolean cancelled) {
-        if (kind == WorkService.Work.EXTRACT) {
+        if (kind == WorkService.Work.IMPORT) {
+            if (err == null) checkAndStart(); // exactly the same post-extraction entry point
+            else {
+                showSetup(err);
+                new AlertDialog.Builder(this).setTitle(R.string.setup_extracted).setMessage(err)
+                        .setPositiveButton(android.R.string.ok, null).show();
+            }
+        } else if (kind == WorkService.Work.EXTRACT) {
             if (err == null) checkAndStart();  // checks the extracted executable against this build
             else showSetup(getString(R.string.extract_failed, err));
         } else if (err == null && !cancelled) {
@@ -1248,7 +1313,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
 
     // ------------------------------------------------------------------ import / export
     // the game save (files/save) and the save states (files/states) to and from a folder the user picks
-    static final int PICK_EXPORT = 2, PICK_IMPORT = 3, PICK_DISC = 4;
+    static final int PICK_EXPORT = 2, PICK_IMPORT = 3, PICK_DISC = 4, PICK_EXTRACTED = 6;
     private boolean exportSave = true, exportStates = true;
 
     void chooseExport() {
@@ -1369,6 +1434,10 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == PICK_EXTRACTED && result == RESULT_OK && data != null && data.getData() != null) {
+            startExtractedImport(data);
+            return;
+        }
         if (request == PICK_DRIVER && result == RESULT_OK && data != null && data.getData() != null) {
             installDriver(data.getData());
             return;

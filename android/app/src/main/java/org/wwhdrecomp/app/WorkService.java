@@ -17,7 +17,7 @@ import android.util.Log;
 import java.util.concurrent.Callable;
 
 /**
- * Keeps the app running while the game is extracted or its code compiled (several minutes): a
+ * Keeps the app running while the game is extracted, imported or its code compiled (several minutes): a
  * foreground service with a progress notification, so the work continues when the app is in the
  * background. The work itself runs on a thread of {@link Work}; the service only shows it.
  */
@@ -27,10 +27,10 @@ public final class WorkService extends Service {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable update = this::update;
 
-    /** The one long job that may run (extraction or compile), shared by every MainActivity instance. */
+    /** The one long job that may run (extraction, import or compile), shared by every MainActivity instance. */
     static final class Work {
-        static final int EXTRACT = 1, COMPILE = 2;
-        private static int running;                  // EXTRACT, COMPILE or 0
+        static final int EXTRACT = 1, COMPILE = 2, IMPORT = 3;
+        private static int running;                  // EXTRACT, IMPORT, COMPILE or 0
         private static long startedAt;               // SystemClock.elapsedRealtime()
         private static volatile boolean cancelled;
         private static int finished;                 // a finished job not yet shown by an activity
@@ -42,6 +42,13 @@ public final class WorkService extends Service {
         static long elapsedSeconds() { return (SystemClock.elapsedRealtime() - startedAt) / 1000; }
 
         static void markCancelled() { cancelled = true; }
+        static boolean cancelled() { return cancelled; }
+
+        static long[] progress(int kind) {
+            return kind == IMPORT ? ExtractedGame.progress()
+                    : kind == EXTRACT ? Native.extractProgress()
+                    : kind == COMPILE ? Native.compileProgress() : new long[] {0, 0};
+        }
 
         /** Starts `job` (returns null or an error) unless a job is running; the result goes to MainActivity.workFinished. */
         static synchronized boolean start(Context ctx, int kind, Callable<String> job) {
@@ -74,7 +81,7 @@ public final class WorkService extends Service {
                     MainActivity a = MainActivity.instance;
                     if (a != null && !a.isDestroyed()) takeFinished(a);
                 });
-            }, kind == EXTRACT ? "extract" : "compile").start();
+            }, kind == IMPORT ? "import-game" : kind == EXTRACT ? "extract" : "compile").start();
             return true;
         }
 
@@ -116,17 +123,18 @@ public final class WorkService extends Service {
     }
 
     private Notification build() {
-        boolean extract = Work.running() == Work.EXTRACT;
-        long[] p = extract ? Native.extractProgress() : Native.compileProgress();
+        int kind = Work.running();
+        boolean files = kind == Work.EXTRACT || kind == Work.IMPORT;
+        long[] p = Work.progress(kind);
         long s = Work.elapsedSeconds();
-        String text = p[1] <= 0 ? "" : extract
+        String text = p[1] <= 0 ? (kind == Work.IMPORT ? getString(R.string.import_detail, p[0] / 1048576) : "") : files
                 ? getString(R.string.extract_detail_short, p[0] / 1048576, p[1] / 1048576)
                 : getString(R.string.compile_detail, p[0], p[1], s / 60, s % 60);
         Intent open = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent pi = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_notify_sync)
-                .setContentTitle(getString(extract ? R.string.work_extracting : R.string.work_compiling))
+                .setContentTitle(getString(kind == Work.IMPORT ? R.string.work_importing : files ? R.string.work_extracting : R.string.work_compiling))
                 .setContentText(text)
                 .setProgress(1000, p[1] > 0 ? (int) (p[0] * 1000 / p[1]) : 0, p[1] <= 0)
                 .setOngoing(true)

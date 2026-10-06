@@ -1,0 +1,74 @@
+name: Build extracted game APK
+
+on:
+  push:
+    branches: [feature/extracted-game-folder]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extracted-game-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      WWHD_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential python3
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android toolchain
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+          echo "ANDROID_NDK=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmake/3.22.1/bin" >> "$GITHUB_PATH"
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > android/local.properties
+
+      - name: Test extracted folder import (synthetic inputs)
+        run: bash tools/android/test-extracted-game.sh
+
+      - name: Cache Android LLVM 20.1.8
+        id: llvm
+        uses: actions/cache@v4
+        with:
+          path: build/llvm/install
+          key: android-llvm20-arm64-ndk27.2-${{ runner.os }}-${{ hashFiles('tools/android/build-llvm.sh') }}
+
+      - name: Build LLVM for on-device recompilation
+        if: steps.llvm.outputs.cache-hit != 'true'
+        run: bash tools/android/build-llvm.sh
+
+      - name: Build installable debug APK without game code
+        working-directory: android
+        run: ./gradlew --no-daemon --max-workers=2 testDebugUnitTest assembleDebug -PwwhdDeviceRecomp
+
+      - name: Name APK
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/ZeldaWWHDRecompAndroid-extracted-game-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZeldaWWHDRecompAndroid-extracted-game-debug.apk
+          path: dist/ZeldaWWHDRecompAndroid-extracted-game-debug.apk
+          if-no-files-found: error
+          retention-days: 14

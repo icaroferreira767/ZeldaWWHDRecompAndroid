@@ -4,9 +4,16 @@
 
     <string name="setup_text">The game files were not found or don\'t match this build.\n\nThis app contains only the recompiled code built from your own copy of the game; it needs the extracted game files from the same dump. Extract them on a computer (see README.md: tools/wudextract.py), then copy the resulting folder (with code/, content/ and meta/ inside) to:\n\n%1$s\n\nFor example: adb push game /sdcard/Android/data/org.wwhdrecomp.app/files/\n\nProblem: %2$s</string>
     <string name="setup_retry">Check again</string>
-    <string name="setup_welcome">Welcome!\n\nThis app contains no game files. It plays your own copy of The Legend of Zelda: The Wind Waker HD for Wii U (USA or European version).\n\nPut these three files in one folder on this device, then choose that folder:\n•  your disc image (.wux or .wud)\n•  its disc key (the image\'s name with .key)\n•  the console\'s common key (common.key)\n\nThe app then extracts the game files (about 1.7 GB) and prepares the game code for this device. That happens once and takes a while, depending on the device\'s processor.</string>
+    <string name="setup_welcome">Welcome!\n\nThis app contains no game files. It plays your own copy of The Legend of Zelda: The Wind Waker HD for Wii U (USA or European version).\n\nIf your game is already extracted, choose “Use an already extracted game…” and select the folder containing code, content and meta. The code folder must contain cking.rpx, app.xml and cos.xml. No disc image or keys are needed for this option.\n\nTo extract a disc instead, put these three files in one folder on this device and choose “Extract from your disc image…”:\n•  your disc image (.wux or .wud)\n•  its disc key (the image\'s name with .key)\n•  the console\'s common key (common.key)\n\nThe app copies or extracts the game files (about 1.7 GB), then prepares the game code for this device. That happens once and takes a while, depending on the device\'s processor.</string>
     <string name="setup_problem">The game files found don\'t work: %1$s</string>
     <string name="setup_extract">Extract from your disc image…</string>
+    <string name="setup_extracted">Use an already extracted game…</string>
+    <string name="import_invalid">This doesn\'t look like an extracted Wind Waker HD game.\nSelect the folder containing code, content and meta.\n\nThe code folder must contain cking.rpx, app.xml and cos.xml.</string>
+    <string name="import_running">Copying your extracted game files…\n\nYou can leave the app while the files are copied. Game code preparation starts automatically when the copy is complete.</string>
+    <string name="import_detail">%1$d MB copied</string>
+    <string name="import_failed">Couldn\'t import the game files. Check that the folder is readable and that there is enough free storage, then try again.</string>
+    <string name="import_cancelled">Copying was cancelled. Select the extracted game folder again to retry.</string>
+    <string name="work_importing">Copying the game files</string>
     <string name="extract_missing">Choose the folder that holds your disc image, its disc key and the console\'s common key:\n\n%1$s the image (.wux or .wud)\n%2$s its disc key (the image\'s name with .key)\n%3$s common.key</string>
     <string name="extract_bad_key">A key file must hold 16 bytes or 32 hex digits.</string>
     <string name="extract_running">Extracting the game from your disc image…</string>

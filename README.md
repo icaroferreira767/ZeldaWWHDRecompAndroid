@@ -96,18 +96,36 @@ You need:
 
 - an Android 11 (or newer) device with a 64-bit ARM processor and Vulkan 1.1, about 2 GB of free
   storage and, for the one-time compile, about 2 GB of free memory;
-- your own dump of The Wind Waker HD (USA or Europe): the disc image (`.wux` or `.wud`), its disc key (a
-  `.key` file with the image's name) and the Wii U common key (`common.key`).
+- your own dump of The Wind Waker HD (USA or Europe): either an already extracted folder, or the
+  disc image (`.wux` or `.wud`), its disc key (a `.key` file with the image's name) and the Wii U
+  common key (`common.key`) for disc extraction.
 
 None of these are included or provided here.
 
-1. Put the image and both keys in one folder on your device.
-2. Install the APK and start it. Choose **Extract from your disc image…** and select that folder.
-3. The app extracts the game files (a few seconds to minutes), then prepares the game code for
+1. Put the image and both keys in one folder on your device, or use an already extracted game folder.
+2. Install the APK and start it. Choose **Extract from your disc image…** for a disc, or
+   **Use an already extracted game…** and select the root containing `code/`, `content/` and `meta/`.
+   The extracted folder must include `code/cking.rpx`, `code/app.xml` and `code/cos.xml`.
+   This second option never requests a disc image or keys. It works with Android's folder picker,
+   including external storage, and copies the required files into the app's own game directory.
+3. The app extracts or copies the game files (a few seconds to minutes), then prepares the game code for
    your device (once; how long depends on the processor: about 6 minutes on a Snapdragon 7+ Gen 3,
    7.5 minutes on a Snapdragon 855, 16 minutes on a Helio G85). You can leave the app meanwhile and read a Wind Waker walkthrough guide. A notification shows the progress and keeps the process alive.
 4. The game starts. The first visit to each place may stutter briefly while its shaders compile as usual.
    After that they are cached.
+
+The extracted-folder option uses the same executable validation, USA/Europe detection, LLVM
+PowerPC-to-ARM64 preparation, code cache and startup as disc extraction. No emulator or synthetic
+disc is involved. The copy and compile run through the existing foreground service and progress
+notification. Interrupted compilation resumes as before. Interrupted folder copying is retried
+by selecting the source folder again; incomplete files are never used as a ready game.
+**Check again** checks the same installed game directory for either setup option.
+
+Folder import copies only `cking.rpx`, `app.xml` and `cos.xml` from `code/`, plus the complete
+`content/` and `meta/` trees. Copying uses a 64 KiB buffer; file sizes are used for progress and a
+free-space check when the document provider supplies them. Keep enough space for a local copy
+of the assets and approximately 300 MiB for code preparation. A provider that cannot retain URI
+access requires choosing the folder again after a process restart.
 
 ## Controls
 
@@ -230,6 +248,29 @@ cd android
 echo "sdk.dir=$HOME/Android/Sdk" > local.properties
 ./gradlew assembleRelease -PwwhdDeviceRecomp -PwwhdVersionCode=3 -PwwhdVersionName=0.3
 ```
+
+For an installable test APK with no game code, use `assembleDebug -PwwhdDeviceRecomp`.
+The extracted-folder importer has host-side tests with synthetic inputs only:
+
+```sh
+bash tools/android/test-extracted-game.sh
+```
+
+`.github/workflows/build-extracted-game-apk.yml` builds this debug variant on pushes to
+`feature/extracted-game-folder` (or via `workflow_dispatch` once available on the default branch).
+It checks out submodules recursively, uses JDK 17, SDK 36, NDK 27.2.12479018, CMake 3.22.1 and
+LLVM 20.1.8, runs the importer tests, and uses Gradle's generated debug signing key. LLVM build
+parallelism can be capped with `WWHD_BUILD_JOBS` (the workflow uses two jobs to limit memory).
+No game dump, keys, release keystore or signing password is required for this build.
+
+After a successful run, open the repository's **Actions** tab, select **Build extracted game APK**,
+open the run for this branch, and download **ZeldaWWHDRecompAndroid-extracted-game-debug.apk**
+under **Artifacts**. GitHub downloads a ZIP containing the APK. Artifacts are kept for 14 days.
+
+Device verification (requires your own files): test both setup buttons, malformed folders,
+USA and Europe dumps, internal/external SAF providers, cancelling/retrying a copy, leaving and
+reopening the activity, and cancelling/resuming code preparation. Host tests do not run the
+native recompiler or replace these device checks.
 
 Sign it with your own release key.  
 
